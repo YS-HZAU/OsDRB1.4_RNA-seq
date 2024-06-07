@@ -1,0 +1,165 @@
+######################################
+## PTG20 RNA-seq data analysis 
+##   output: html_document
+##   date: "2024-02-05"
+##
+##  Kabin Xie
+
+## CLean RNA-seq read was aligned to NIP reference (NCBI) genome using salmon
+
+library("tximport")
+library("edgeR")
+library("ggplot2")
+library("Glimma")
+library("pheatmap")
+
+# work directory in my desktop
+setwd("/media/kabinxie/Work2022/RNA_SEQ_ChenYuedan/P2016113016hanyuebin/P2016113016-B3")
+OUT_DIR="./EdgeR_out";
+samples<-read.table("PTG20_samples.txt", head=TRUE);
+rownames(samples)<-samples$sample;
+samples$genotype<-as.factor(samples$genotype);
+design<-model.matrix(~0+genotype, data = samples)
+
+
+## Read QUANT files
+## Generate TU2gene files using bash command
+## cat  genomic.gtf | awk '{if($3=="transcript") print $10 $12}' | uniq | wc -l
+##  54253
+## cat  genomic.gtf | awk '{if($3=="transcript") print $10 $12}' | awk -F ";" '{print $2 "," $1}' > NIP.tu2genes.csv
+##
+
+files<-file.path("/media/kabinxie/Work2022/RNA_SEQ_ChenYuedan/P2016113016hanyuebin/P2016113016-B3/quants_salmon", 
+                 paste(samples$sample, "quant", sep = "_"), "quant.sf");
+names(files)<-samples$sample;
+file.exists(files);
+tx2gene <- read.csv("/media/kabinxie/Work2022/NIP_ncbi_dataset/data/GCF_001433935.1/NIP.tu2genes.csv", head=F);
+txi <- tximport(files, type="salmon", tx2gene=tx2gene);
+
+# refrna annotation was download from NCBI entrez FTP site, oryza sative
+Os_entrez <- read.table("/media/kabinxie/Work2022/NIP_ncbi_dataset/data/GCF_001433935.1/Oryza_sativa.gene_info", head=T, sep="\t",quote="");
+# refRNA annotation was download from NCBI entrez FTP site, oryza sative
+Os_entrez <- read.table("/media/kabinxie/Work2022/NIP_ncbi_dataset/data/GCF_001433935.1/Oryza_sativa.gene_info", head=T, sep="\t",quote="");
+Os_rapdb<- read.table("/media/kabinxie/Work2022/NIP_ncbi_dataset/IRGSP-1.0_representative_annotation_2024-01-11.tsv", head=T, sep="\t",quote="",fill = TRUE)
+Os_kegg<- read.table("/media/kabinxie/Work2022/NIP_ncbi_dataset/kegg_list_osa.txt",head=T, sep="\t",quote="");
+Os_funrice<-read.table("/media/kabinxie/Work2022/NIP_ncbi_dataset/funrice_geneInfo.table.txt", header = T, sep="\t")
+dim(Os_entrez)
+dim(Os_rapdb);
+length(unique(Os_rapdb$Locus_ID))  #37840
+dim(Os_kegg)  # 28143
+length(grep("OSNPB",Os_entrez$LocusTag))  #26123 has OSNPB ids
+length(grep("-",Os_entrez$LocusTag))      #8208
+table(Os_entrez$type_of_gene[(grep("-",Os_entrez$LocusTag))])
+
+## Convert eh OSNPB tag to RAPDB tag
+Os_entrez$RAPdb_ID<-"-";
+t<-Os_entrez$LocusTag[grep("OSNPB",Os_entrez$LocusTag)]
+Os_entrez$RAPdb_ID[grep("OSNPB",Os_entrez$LocusTag)]<-paste("Os", substr(t,7,8),"g",substr(t,9,15), sep="")
+# Keep one RAPdb ID for each record. Note, some gene model have multiple RAPdb ID
+Os_funrice$RAPdb<-substr(Os_funrice$RAPdb,1,15)
+Os_funrice<-Os_funrice[grep("Os", Os_funrice$RAPdb),]
+# Manually edit following records: ‘Os03g0793500’, ‘Os03g0819600’, ‘Os05g0200400’, ‘Os10g0524500’, ‘Os11g0547000’ 
+rownames(Os_funrice)<-Os_funrice$RAPdb
+
+Os_entrez$funrice<-"-"
+t<-(Os_entrez$RAPdb_ID %in% Os_funrice$RAPdb)  #4140 characterized genes
+Os_entrez$funrice[t]<-Os_funrice[Os_entrez$RAPdb_ID[t],1]
+
+
+# calculate normalize factor following instructions from tximport
+# https://bioconductor.org/packages/release/bioc/vignettes/tximport/inst/doc/tximport.html#edgeR
+cts <- txi$counts
+normMat <- txi$length
+normMat <- normMat/exp(rowMeans(log(normMat)))
+normCts <- cts/normMat
+eff.lib <- calcNormFactors(normCts) * colSums(normCts)
+
+# Combining effective library sizes with the length factors, and calculating
+# offsets for a log-link GLM.
+normMat <- sweep(normMat, 2, eff.lib, "*")
+normMat <- log(normMat)
+
+# Creating a DGEList object for edgeR.
+is_ref_rna<-stringr::str_detect(Os_entrez$Symbol, "LOC*")
+Os_entrez<-Os_entrez[is_ref_rna,]
+rownames(Os_entrez)<-Os_entrez$Symbol;
+
+y <- DGEList(cts, group = samples$group, genes = Os_entrez[rownames(cts),c(2:5,9:10,14,17:18)])
+y$samples # check a assignment of group
+y <- scaleOffset(y, normMat)
+
+# filtering using the design information
+keep <- filterByExpr(y, design)
+table(keep)
+y <- y[keep, ]
+boxplot(log2(y$counts+1)) # without normalization
+cpms <- edgeR::cpm(y, offset = y$offset, log = TRUE)
+colnames(cpms)
+pdf(paste(OUT_DIR, "boxplot.pdf",sep="/"))
+boxplot(cpms, ylab="CPM")
+dev.off()
+
+y <- estimateDisp(y, design, robust=TRUE)
+plotBCV(y)
+fit <- glmQLFit(y, design, robust=TRUE)
+
+head(fit$coefficients)
+plotQLDisp(fit)
+summary(fit$df.prior)
+
+ptg20_vs_wt <- makeContrasts(genotypeKO-genotypeWT, levels=design)
+
+## setting: 
+res_ptg20 <- glmQLFTest(fit, contrast=ptg20_vs_wt )
+topTags(res_ptg20)
+topTags(res_ptg20, adjust.method="none", p.value = 0.05, n=100)
+is.DEG <- decideTestsDGE(res_ptg20,p.value=0.05, adjust.method = "BH")
+summary(is.DEG)
+is.DEG <- decideTestsDGE(res_ptg20,p.value=0.1, adjust.method = "none", lfc=log2(2.0))
+summary(is.DEG);
+
+glimmaVolcano(res_ptg20, dge = y) 
+
+## Using 2 foldchange as the thread
+res_ptg20_lfc <- glmTreat(fit, contrast=ptg20_vs_wt, lfc=log2(1.5))
+table(res_ptg20_lfc$table$PValue<0.01)
+hist(res_ptg20_lfc$table$PValue)
+
+is.DEG <- decideTestsDGE(res_ptg20_lfc,p.value=0.05, adjust.method = "none", lfc=log2(1.5))
+summary(is.DEG)
+topTags(res_ptg20_lfc)
+glimmaVolcano(res_ptg20_lfc,dge = y)
+htmlwidgets::saveWidget(glimmaVolcano(res_ptg20_lfc,dge = y), "EdgeR_out/ptg20_lfc2_volcano_plot.html")
+
+# draw volcano plot with ggplot2
+res_ptg20_df<-cbind(res_ptg20_lfc$table,res_ptg20_lfc$genes)
+res_ptg20_df$log10Pvalue<- -log10(res_ptg20_df$PValue);
+
+
+p<-ggplot(res_ptg20_df, aes(x = logFC, y=log10Pvalue)) + 
+  geom_point(aes(colour=PValue < 0.01 & abs(logFC)>log2(2)), size=1)
+p
+ggsave(filename=paste(OUT_DIR, "volcanoplot.pdf", sep="/"), p)  
+
+DEG<-res_ptg20_df$PValue < 0.01 & abs(res_ptg20_df$logFC)>log2(2)
+table(DEG)
+res_ptg20_df[DEG,]
+write.table(res_ptg20_df[DEG,], file="EdgeR_out/ptg20_lfc2_DEG.txt")
+
+ptg20_cpm<-cpms[res_ptg20_df$Symbol[DEG],]
+row_annotation<-read.table("gene_catalog.txt",head=T, sep="\t")  # annotation
+row.names(row_annotation)<-row_annotation$ID
+row_annotation<-data.frame(row_annotation[,-1])
+row_annotation$empthy<-"DEG";
+anno_col<-list(Cat = c('protein-coding' = "grey", OsDRB1.4="red", RGA ="blue", ncRNA="green", uncharacterized="black"))
+
+p<-pheatmap(ptg20_cpm,show_rownames = T, scale="row",main = "CPM of DEGs associated to OsDRB1.4-KO",
+            annotation_row = row_annotation[,c(2,2)],
+            annotation_colors = anno_col
+            );
+ggsave(filename=paste(OUT_DIR, "heatmap.pdf", sep="/"), p)
+## End
+
+
+
+
