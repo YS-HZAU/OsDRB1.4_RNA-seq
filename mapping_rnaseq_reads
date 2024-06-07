@@ -1,0 +1,51 @@
+#!/bin/bash
+
+
+##
+# Process the clean NGS reading using salmon
+# Chen Yuedan's NGS, 4 RNA-seq samples
+# paired end sequencing
+#
+# Kabin Xie
+# 2024.2
+##
+
+## Map to NCBI rna.fan
+## index the transcript file first
+
+# Makesure the working directory is correctly setted before run following commands
+
+NIP_NCBI_RNA=/media/kabinxie/Work2022/NIP_ncbi_dataset/data/GCF_001433935.1/rna_index
+echo "The ref RNA is :$NIP_NCBI_RNA"
+echo "Processing RNA-seq data of PTG20"
+date
+
+  echo "processing sample ${fn}"
+  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+  salmon quant -i $NIP_NCBI_RNA -l A \
+             -1 clean_data/PTG20_1_1.clean.fq.gz \
+             -2 clean_data/PTG20_1_2.clean.fq.gz \
+             -p 6 --validateMapping  --seqBias \
+             -o quants_salmon/PTG20_1_quant
+
+  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+  salmon quant -i $NIP_NCBI_RNA -l A \
+             -1 clean_data/PTG20_12_1.clean.fq.gz \
+             -2 clean_data/PTG20_12_2.clean.fq.gz \
+             -p 6 --validateMapping  --seqBias \
+             -o quants_salmon/PTG20_12_quant
+
+  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+  salmon quant -i $NIP_NCBI_RNA -l A \
+             -1 clean_data/WT1_1.clean.fq.gz \
+             -2 clean_data/WT1_2.clean.fq.gz \
+             -p 6 --validateMapping  --seqBias \
+             -o quants_salmon/WT_1_quant
+
+  echo ">>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>>"
+  salmon quant -i $NIP_NCBI_RNA -l A \
+             -1 clean_data/WT2_1.clean.fq.gz \
+             -2 clean_data/WT2_2.clean.fq.gz \
+             -p 6 --validateMapping  --seqBias \
+             -o quants_salmon/WT_2_quant
+  
